@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { buildBezierPath, mapPoints } from '../utils/pathBuilder.js';
 
-const VIEW_W = 1400;
+const VIEW_W = 2800;
 const VIEW_H = 1350;
 const PADDING = { top: 200, right: 56, bottom: 120, left: 80 };
 
@@ -145,7 +145,7 @@ export default function RankChart({ data, frame, svgRef }) {
             />
             <text
               x={x}
-              y={chartRect.y + chartRect.height + 40}
+              y={chartRect.y + chartRect.height + 80}
               textAnchor="middle"
               fill={isCurrent ? COLORS.title : COLORS.axisLabel}
               fontSize="24"

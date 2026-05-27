@@ -20,14 +20,20 @@
  *   onProgress?: (ratio: number) => void,
  * }} opts
  */
+// Native SVG viewBox size — 1:1 pixel mapping, no upscale needed
+const EXPORT_WIDTH = 2800;
+const EXPORT_HEIGHT = 1350;
+// 20 Mbps VP9 — high quality, manageable for browser MediaRecorder
+const EXPORT_BITRATE = 20_000_000;
+
 export async function exportAnimation(opts) {
   const {
     svg,
     totalFrames,
     fps = 30,
-    width = 1400,
-    height = 1350,
-    filename = 'league-race.webm',
+    width = EXPORT_WIDTH,
+    height = EXPORT_HEIGHT,
+    filename = '4k-syrian-league-race.webm',
     renderFrame,
     onProgress,
   } = opts;
@@ -43,7 +49,11 @@ export async function exportAnimation(opts) {
 
   const stream = canvas.captureStream(fps);
   const mime = pickMime();
-  const recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+  const recorderOpts = {
+    ...(mime ? { mimeType: mime } : {}),
+    videoBitsPerSecond: EXPORT_BITRATE,
+  };
+  const recorder = new MediaRecorder(stream, recorderOpts);
   const chunks = [];
   recorder.ondataavailable = (e) => {
     if (e.data && e.data.size > 0) chunks.push(e.data);
@@ -93,6 +103,7 @@ export async function exportAnimation(opts) {
 
 function pickMime() {
   const candidates = [
+    'video/webm;codecs=vp9,opus',
     'video/webm;codecs=vp9',
     'video/webm;codecs=vp8',
     'video/webm',

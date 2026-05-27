@@ -42,7 +42,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen flex flex-col items-center gap-4 p-4 sm:p-6">
-      <header className="w-full max-w-6xl text-center">
+      <header className="w-full max-w-full text-center">
         <h1 className="text-2xl sm:text-3xl font-bold" style={{ color: '#066b4f' }}>
           سباق ترتيب الدوري السوري الممتاز
         </h1>
@@ -52,13 +52,13 @@ export default function App() {
       </header>
 
       <main
-        className="w-full max-w-6xl aspect-[1400/1350] rounded-2xl overflow-hidden shadow-2xl border"
+        className="w-full max-w-full aspect-[2800/1350] rounded-2xl overflow-hidden shadow-2xl border"
         style={{ background: '#f9f9f9', borderColor: '#066b4f33' }}
       >
         <RankChart data={standings} frame={anim.frame} svgRef={svgRef} />
       </main>
 
-      <section className="w-full max-w-6xl flex flex-col gap-3">
+      <section className="w-full max-w-full flex flex-col gap-3">
         <ProgressBar
           frame={anim.frame}
           total={total}
