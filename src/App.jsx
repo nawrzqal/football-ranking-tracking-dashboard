@@ -6,12 +6,14 @@ import { useAnimation, SPEED_PRESETS } from './hooks/useAnimation.js';
 import { exportAnimation } from './utils/videoExport.js';
 import standings from './data/standings.json';
 
+const STOP_WEEK = 24;
+
 export default function App() {
-  const total = standings.matchweeks.length;
+  const totalWeeks = standings.matchweeks.length;
   const svgRef = useRef(null);
 
   const anim = useAnimation({
-    totalFrames: total,
+    totalFrames: STOP_WEEK,
     initialSpeed: SPEED_PRESETS.normal,
   });
 
@@ -26,10 +28,10 @@ export default function App() {
     try {
       await exportAnimation({
         svg: svgRef.current,
-        totalFrames: total,
+        totalFrames: STOP_WEEK,
         renderFrame: (i) => anim.setFrame(i),
         onProgress: setExportProgress,
-        filename: 'syrian-league-race.webm',
+        filename: 'syrian-league-race.mov',
       });
     } catch (err) {
       console.error('Export failed:', err);
@@ -38,7 +40,7 @@ export default function App() {
       setIsExporting(false);
       setExportProgress(0);
     }
-  }, [anim, total]);
+  }, [anim]);
 
   return (
     <div className="min-h-screen flex flex-col items-center gap-4 p-4 sm:p-6">
@@ -47,7 +49,7 @@ export default function App() {
           سباق ترتيب الدوري السوري الممتاز
         </h1>
         <p className="text-sm mt-1" style={{ color: '#095e47' }}>
-          {`${standings.teams.length} فريق · ${total} جولة`}
+          {`${standings.teams.length} فريق · ${totalWeeks} جولة`}
         </p>
       </header>
 
@@ -61,7 +63,7 @@ export default function App() {
       <section className="w-full max-w-full flex flex-col gap-3">
         <ProgressBar
           frame={anim.frame}
-          total={total}
+          total={STOP_WEEK}
           onSeek={anim.setFrame}
         />
         <Controls

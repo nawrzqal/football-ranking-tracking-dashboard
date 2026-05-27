@@ -1,30 +1,45 @@
-/**
- * Record an animation to a WebM video via MediaRecorder + a hidden canvas.
- *
- * Fully isolated: the caller provides a `renderFrame(frameIndex)` async function
- * that mutates external state so that the next time the canvas is repainted
- * (via `drawSvgToCanvas`) the new frame is reflected. The exporter handles:
- *   - SVG → canvas rasterization at 30fps
- *   - MediaRecorder lifecycle
- *   - progress reporting
- *   - download trigger
- *
- * @param {{
- *   svg: SVGSVGElement,
- *   totalFrames: number,
- *   fps?: number,
- *   width?: number,
- *   height?: number,
- *   filename?: string,
- *   renderFrame: (i: number) => Promise<void> | void,
- *   onProgress?: (ratio: number) => void,
- * }} opts
- */
+import { FFmpeg } from '@ffmpeg/ffmpeg';
+import { fetchFile, toBlobURL } from '@ffmpeg/util';
+
 // Native SVG viewBox size — 1:1 pixel mapping, no upscale needed
 const EXPORT_WIDTH = 2800;
 const EXPORT_HEIGHT = 1350;
 // 20 Mbps VP9 — high quality, manageable for browser MediaRecorder
 const EXPORT_BITRATE = 20_000_000;
+
+// Loaded once, reused across exports
+let _ffmpeg = null;
+async function getFFmpeg() {
+  if (_ffmpeg) return _ffmpeg;
+  const ff = new FFmpeg();
+  const base = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd';
+  await ff.load({
+    coreURL: await toBlobURL(`${base}/ffmpeg-core.js`, 'text/javascript'),
+    wasmURL: await toBlobURL(`${base}/ffmpeg-core.wasm`, 'application/wasm'),
+  });
+  _ffmpeg = ff;
+  return ff;
+}
+
+async function transcodeToMov(webmBlob, onProgress) {
+  const ff = await getFFmpeg();
+  ff.on('progress', ({ progress }) => onProgress?.(progress));
+  await ff.writeFile('input.webm', await fetchFile(webmBlob));
+  await ff.exec([
+    '-i', 'input.webm',
+    '-c:v', 'libx264',
+    '-preset', 'fast',
+    '-crf', '18',
+    '-pix_fmt', 'yuv420p',
+    '-movflags', '+faststart',
+    '-an',
+    'output.mov',
+  ]);
+  const data = await ff.readFile('output.mov');
+  await ff.deleteFile('input.webm');
+  await ff.deleteFile('output.mov');
+  return new Blob([data.buffer], { type: 'video/quicktime' });
+}
 
 export async function exportAnimation(opts) {
   const {
@@ -33,7 +48,7 @@ export async function exportAnimation(opts) {
     fps = 30,
     width = EXPORT_WIDTH,
     height = EXPORT_HEIGHT,
-    filename = '4k-syrian-league-race.webm',
+    filename = '4k-syrian-league-race.mov',
     renderFrame,
     onProgress,
   } = opts;
@@ -109,9 +124,12 @@ export async function exportAnimation(opts) {
   }
 
   await done;
-  const blob = new Blob(chunks, { type: chunks[0]?.type || 'video/webm' });
-  triggerDownload(blob, filename);
-  return blob;
+  const webmBlob = new Blob(chunks, { type: chunks[0]?.type || 'video/webm' });
+
+  onProgress?.(0); // reset bar while transcoding
+  const movBlob = await transcodeToMov(webmBlob, (p) => onProgress?.(p));
+  triggerDownload(movBlob, filename);
+  return movBlob;
 }
 
 function pickMime() {
