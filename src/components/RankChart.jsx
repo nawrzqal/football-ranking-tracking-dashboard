@@ -32,27 +32,43 @@ export default function RankChart({ data, frame, svgRef }) {
     maxRank,
   };
 
-  const currentMW = matchweeks[frame] ?? matchweeks[0];
-  const visibleCount = frame + 1;
+  const frameFloor = Math.max(0, Math.min(matchweeks.length - 1, Math.floor(frame)));
+  const frameT = Math.max(0, frame - frameFloor);
+  const isExact = frameT < 1e-6;
+  const visibleCount = frameFloor + 1;
+
+  const currentMW = matchweeks[frameFloor] ?? matchweeks[0];
 
   const teamGeoms = useMemo(() => {
     return teams.map((team) => {
       const fullPts = mapPoints(matchweeks, team.rankHistory, chartRect);
-      const visiblePts = fullPts.slice(0, visibleCount);
+      let visiblePts = fullPts.slice(0, visibleCount);
+      const a = fullPts[frameFloor];
+      const b = fullPts[frameFloor + 1];
+      if (!isExact && a && b) {
+        const tip = {
+          x: a.x + (b.x - a.x) * frameT,
+          y: a.y + (b.y - a.y) * frameT,
+        };
+        visiblePts = [...visiblePts, tip];
+      }
       const d = buildBezierPath(visiblePts);
       const last = visiblePts[visiblePts.length - 1] ?? fullPts[0];
       return { team, fullPts, visiblePts, d, last };
     });
     // chartRect is recomputed each render from constants — safe to omit
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [teams, matchweeks, visibleCount]);
+  }, [teams, matchweeks, visibleCount, frameFloor, frameT, isExact]);
 
   const sortedByRank = useMemo(() => {
+    const rankAt = (history) => {
+      if (frameFloor >= history.length - 1) return history[history.length - 1];
+      return history[frameFloor] + (history[frameFloor + 1] - history[frameFloor]) * frameT;
+    };
     return [...teamGeoms].sort(
-      (a, b) =>
-        a.team.rankHistory[frame] - b.team.rankHistory[frame]
+      (a, b) => rankAt(a.team.rankHistory) - rankAt(b.team.rankHistory)
     );
-  }, [teamGeoms, frame]);
+  }, [teamGeoms, frameFloor, frameT]);
 
   const stepX = chartRect.width / Math.max(1, matchweeks.length - 1);
   const stepY = chartRect.height / Math.max(1, maxRank - 1);
@@ -130,7 +146,7 @@ export default function RankChart({ data, frame, svgRef }) {
 
       {matchweeks.map((mw, i) => {
         const x = chartRect.x + i * stepX;
-        const isCurrent = i === frame;
+        const isCurrent = i === frameFloor;
         return (
           <g key={`mw-${mw}`}>
             <line

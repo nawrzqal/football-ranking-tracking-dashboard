@@ -65,32 +65,45 @@ export async function exportAnimation(opts) {
   // Wait for MediaRecorder to fully initialise before writing frames
   await waitMs(200);
 
-  const framesPerStep = Math.max(1, Math.round(fps * 0.6));
+  // Time budget per matchweek transition (seconds). Lower = faster playback.
+  const SECONDS_PER_MATCHWEEK = 0.6;
+  const stepsPerMW = Math.max(1, Math.round(fps * SECONDS_PER_MATCHWEEK));
+  const initialHold = fps; // 1s pause on the very first frame
+  const finalHold = fps * 2; // 2s pause on the last frame
+
+  const captureFrame = async (frac) => {
+    await renderFrame(frac);
+    // Allow React to commit the DOM update before rasterising
+    await nextFrame();
+    await nextFrame();
+    await nextFrame();
+    const img = await svgToImage(svg, width, height);
+    ctx.fillStyle = '#f9f9f9';
+    ctx.fillRect(0, 0, width, height);
+    ctx.drawImage(img, 0, 0, width, height);
+    await waitMs(1000 / fps);
+  };
 
   try {
-    for (let i = 0; i < totalFrames; i++) {
-      await renderFrame(i);
-      // Wait several animation frames so React can commit the DOM update before
-      // we rasterize the SVG — a single rAF is not enough for batched re-renders.
-      await nextFrame();
-      await nextFrame();
-      await nextFrame();
-      const img = await svgToImage(svg, width, height);
-      // Hold each step longer on the first frame so it's clearly visible
-      const hold = i === 0 ? fps : framesPerStep;
-      for (let r = 0; r < hold; r++) {
-        ctx.fillStyle = '#f9f9f9';
-        ctx.fillRect(0, 0, width, height);
-        ctx.drawImage(img, 0, 0, width, height);
-        await waitMs(1000 / fps);
+    // Hold initial frame
+    for (let r = 0; r < initialHold; r++) {
+      await captureFrame(0);
+    }
+
+    // Smooth transitions between matchweeks
+    for (let i = 0; i < totalFrames - 1; i++) {
+      for (let r = 0; r < stepsPerMW; r++) {
+        const t = r / stepsPerMW;
+        await captureFrame(i + t);
       }
       onProgress?.((i + 1) / totalFrames);
     }
-    // hold the final frame for ~2s
-    const hold = fps * 2;
-    for (let r = 0; r < hold; r++) {
-      await waitMs(1000 / fps);
+
+    // Final exact frame + hold
+    for (let r = 0; r < finalHold; r++) {
+      await captureFrame(totalFrames - 1);
     }
+    onProgress?.(1);
   } finally {
     recorder.stop();
   }

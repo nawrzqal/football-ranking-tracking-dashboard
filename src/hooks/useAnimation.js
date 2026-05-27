@@ -7,35 +7,30 @@ export const SPEED_PRESETS = {
 };
 
 /**
- * Animation state machine for stepping through frames 0..totalFrames-1.
+ * Animation state machine for advancing through frames 0..totalFrames-1.
  *
- * State:
- *   - frame: integer index of the current frame
- *   - isPlaying: boolean
- *   - speed: ms per frame (lower = faster)
+ * During playback, `frame` is a continuous float so that consumers can
+ * interpolate positions between integer matchweeks for smooth motion. The
+ * button-driven step()/setFrame() actions still operate on integer indices.
  *
- * Transitions:
- *   play() / pause() / toggle()
- *   step(+1) / step(-1)
- *   reset()
- *   setFrame(n) — clamped
- *   setSpeed(ms)
- *
- * On reaching the last frame while playing, it auto-pauses.
+ * `speed` is "ms per matchweek transition" — lower = faster.
  */
 export function useAnimation({ totalFrames, initialSpeed = SPEED_PRESETS.normal } = {}) {
   const [frame, setFrameState] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [speed, setSpeed] = useState(initialSpeed);
 
-  const timerRef = useRef(null);
+  const rafRef = useRef(null);
+  const lastTimeRef = useRef(0);
   const totalRef = useRef(totalFrames);
   totalRef.current = totalFrames;
+  const speedRef = useRef(speed);
+  speedRef.current = speed;
 
-  const clear = () => {
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
+  const clearRaf = () => {
+    if (rafRef.current) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
     }
   };
 
@@ -49,7 +44,7 @@ export function useAnimation({ totalFrames, initialSpeed = SPEED_PRESETS.normal 
   }, []);
 
   const step = useCallback((delta = 1) => {
-    setFrame((f) => f + delta);
+    setFrame((f) => Math.round(f) + delta);
   }, [setFrame]);
 
   const play = useCallback(() => {
@@ -66,22 +61,37 @@ export function useAnimation({ totalFrames, initialSpeed = SPEED_PRESETS.normal 
   }, []);
 
   useEffect(() => {
-    clear();
+    clearRaf();
     if (!isPlaying) return;
-    timerRef.current = setInterval(() => {
+
+    lastTimeRef.current = performance.now();
+    const tick = (now) => {
+      const dt = now - lastTimeRef.current;
+      lastTimeRef.current = now;
+      const delta = dt / speedRef.current;
+
+      let stop = false;
       setFrameState((f) => {
         const total = totalRef.current;
-        if (f >= total - 1) {
-          setIsPlaying(false);
-          return f;
+        const next = f + delta;
+        if (next >= total - 1) {
+          stop = true;
+          return total - 1;
         }
-        return f + 1;
+        return Math.max(0, next);
       });
-    }, speed);
-    return clear;
-  }, [isPlaying, speed]);
 
-  useEffect(() => () => clear(), []);
+      if (stop) {
+        setIsPlaying(false);
+        return;
+      }
+      rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+    return clearRaf;
+  }, [isPlaying]);
+
+  useEffect(() => () => clearRaf(), []);
 
   return {
     frame,
