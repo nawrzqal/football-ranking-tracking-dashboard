@@ -1,45 +1,8 @@
-import { FFmpeg } from '@ffmpeg/ffmpeg';
-import { fetchFile, toBlobURL } from '@ffmpeg/util';
+import { Muxer, ArrayBufferTarget } from 'mp4-muxer';
 
-// Native SVG viewBox size — 1:1 pixel mapping, no upscale needed
 const EXPORT_WIDTH = 2800;
 const EXPORT_HEIGHT = 1350;
-// 20 Mbps VP9 — high quality, manageable for browser MediaRecorder
 const EXPORT_BITRATE = 20_000_000;
-
-// Loaded once, reused across exports
-let _ffmpeg = null;
-async function getFFmpeg() {
-  if (_ffmpeg) return _ffmpeg;
-  const ff = new FFmpeg();
-  const base = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd';
-  await ff.load({
-    coreURL: await toBlobURL(`${base}/ffmpeg-core.js`, 'text/javascript'),
-    wasmURL: await toBlobURL(`${base}/ffmpeg-core.wasm`, 'application/wasm'),
-  });
-  _ffmpeg = ff;
-  return ff;
-}
-
-async function transcodeToMov(webmBlob, onProgress) {
-  const ff = await getFFmpeg();
-  ff.on('progress', ({ progress }) => onProgress?.(progress));
-  await ff.writeFile('input.webm', await fetchFile(webmBlob));
-  await ff.exec([
-    '-i', 'input.webm',
-    '-c:v', 'libx264',
-    '-preset', 'fast',
-    '-crf', '18',
-    '-pix_fmt', 'yuv420p',
-    '-movflags', '+faststart',
-    '-an',
-    'output.mov',
-  ]);
-  const data = await ff.readFile('output.mov');
-  await ff.deleteFile('input.webm');
-  await ff.deleteFile('output.mov');
-  return new Blob([data.buffer], { type: 'video/quicktime' });
-}
 
 export async function exportAnimation(opts) {
   const {
@@ -48,7 +11,7 @@ export async function exportAnimation(opts) {
     fps = 30,
     width = EXPORT_WIDTH,
     height = EXPORT_HEIGHT,
-    filename = '4k-syrian-league-race.mov',
+    filename = 'syrian-league-race.mp4',
     renderFrame,
     onProgress,
   } = opts;
@@ -57,94 +20,146 @@ export async function exportAnimation(opts) {
   if (typeof renderFrame !== 'function')
     throw new Error('exportAnimation: renderFrame must be a function');
 
+  if (typeof VideoEncoder === 'undefined') {
+    throw new Error(
+      'WebCodecs غير مدعوم في هذا المتصفح. استخدم Chrome/Edge أحدث إصدار.'
+    );
+  }
+
+  const codecCandidates = [
+    'avc1.640033', // H.264 High @ Level 5.1 (4K capable)
+    'avc1.640028', // H.264 High @ Level 4.0
+    'avc1.4d0033', // H.264 Main @ Level 5.1
+    'avc1.42E033', // H.264 Baseline @ Level 5.1
+  ];
+  let codec = null;
+  for (const c of codecCandidates) {
+    const support = await VideoEncoder.isConfigSupported({
+      codec: c,
+      width,
+      height,
+      bitrate: EXPORT_BITRATE,
+      framerate: fps,
+    });
+    if (support.supported) {
+      codec = support.config.codec;
+      break;
+    }
+  }
+  if (!codec) throw new Error('لا يوجد ترميز H.264 مدعوم في هذا المتصفح.');
+
+  const muxer = new Muxer({
+    target: new ArrayBufferTarget(),
+    video: {
+      codec: 'avc',
+      width,
+      height,
+      frameRate: fps,
+    },
+    fastStart: 'in-memory',
+  });
+
+  const encoder = new VideoEncoder({
+    output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
+    error: (e) => {
+      console.error('VideoEncoder error:', e);
+    },
+  });
+  encoder.configure({
+    codec,
+    width,
+    height,
+    bitrate: EXPORT_BITRATE,
+    framerate: fps,
+  });
+
   const canvas = document.createElement('canvas');
   canvas.width = width;
   canvas.height = height;
   const ctx = canvas.getContext('2d');
 
-  const stream = canvas.captureStream(fps);
-  const mime = pickMime();
-  const recorderOpts = {
-    ...(mime ? { mimeType: mime } : {}),
-    videoBitsPerSecond: EXPORT_BITRATE,
-  };
-  const recorder = new MediaRecorder(stream, recorderOpts);
-  const chunks = [];
-  recorder.ondataavailable = (e) => {
-    if (e.data && e.data.size > 0) chunks.push(e.data);
-  };
-
-  const done = new Promise((resolve) => (recorder.onstop = resolve));
-  recorder.start();
-
-  // Wait for MediaRecorder to fully initialise before writing frames
-  await waitMs(200);
-
-  // Time budget per matchweek transition (seconds). Lower = faster playback.
   const SECONDS_PER_MATCHWEEK = 0.6;
   const stepsPerMW = Math.max(1, Math.round(fps * SECONDS_PER_MATCHWEEK));
-  const initialHold = fps; // 1s pause on the very first frame
-  const finalHold = fps * 2; // 2s pause on the last frame
+  const initialHold = fps;
+  const finalHold = fps * 2;
 
-  const captureFrame = async (frac) => {
+  const totalRenderedFrames =
+    initialHold + (totalFrames - 1) * stepsPerMW + finalHold;
+  const frameDurationUs = Math.round(1_000_000 / fps);
+  let frameIndex = 0;
+  let lastReportedProgress = -1;
+
+  const reportProgress = () => {
+    const p = frameIndex / totalRenderedFrames;
+    const bucket = Math.floor(p * 100);
+    if (bucket !== lastReportedProgress) {
+      lastReportedProgress = bucket;
+      onProgress?.(p);
+    }
+  };
+
+  const drawAndEncode = async (frac) => {
     await renderFrame(frac);
-    // Allow React to commit the DOM update before rasterising
     await nextFrame();
     await nextFrame();
     await nextFrame();
+
     const img = await svgToImage(svg, width, height);
     ctx.fillStyle = '#f9f9f9';
     ctx.fillRect(0, 0, width, height);
     ctx.drawImage(img, 0, 0, width, height);
-    await waitMs(1000 / fps);
+
+    const timestamp = frameIndex * frameDurationUs;
+    // Keyframe every ~1s and on the very first frame
+    const keyFrame = frameIndex % fps === 0;
+    const videoFrame = new VideoFrame(canvas, {
+      timestamp,
+      duration: frameDurationUs,
+    });
+    encoder.encode(videoFrame, { keyFrame });
+    videoFrame.close();
+    frameIndex++;
+    reportProgress();
+
+    // Backpressure: don't let the encoder queue balloon
+    if (encoder.encodeQueueSize > 8) {
+      while (encoder.encodeQueueSize > 4) {
+        await waitMs(10);
+      }
+    }
   };
 
   try {
-    // Hold initial frame
     for (let r = 0; r < initialHold; r++) {
-      await captureFrame(0);
+      await drawAndEncode(0);
     }
-
-    // Smooth transitions between matchweeks
     for (let i = 0; i < totalFrames - 1; i++) {
       for (let r = 0; r < stepsPerMW; r++) {
         const t = r / stepsPerMW;
-        await captureFrame(i + t);
+        await drawAndEncode(i + t);
       }
-      onProgress?.((i + 1) / totalFrames);
     }
-
-    // Final exact frame + hold
     for (let r = 0; r < finalHold; r++) {
-      await captureFrame(totalFrames - 1);
+      await drawAndEncode(totalFrames - 1);
     }
+
+    await encoder.flush();
+    encoder.close();
+    muxer.finalize();
     onProgress?.(1);
-  } finally {
-    recorder.stop();
-  }
 
-  await done;
-  const webmBlob = new Blob(chunks, { type: chunks[0]?.type || 'video/webm' });
-
-  onProgress?.(0); // reset bar while transcoding
-  const movBlob = await transcodeToMov(webmBlob, (p) => onProgress?.(p));
-  triggerDownload(movBlob, filename);
-  return movBlob;
-}
-
-function pickMime() {
-  const candidates = [
-    'video/webm;codecs=vp9,opus',
-    'video/webm;codecs=vp9',
-    'video/webm;codecs=vp8',
-    'video/webm',
-  ];
-  for (const c of candidates) {
-    if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(c)) {
-      return c;
+    const { buffer } = muxer.target;
+    const blob = new Blob([buffer], { type: 'video/mp4' });
+    triggerDownload(blob, filename);
+    return blob;
+  } catch (err) {
+    try {
+      encoder.close();
+    } catch {
+      // already closed
     }
+    throw err;
   }
-  return null;
 }
 
 function nextFrame() {
@@ -176,15 +191,13 @@ async function svgToImage(svg, width, height) {
   });
 }
 
-/**
- * Convert <image href="..."> inside the cloned SVG to base64 data URLs so the
- * rasterizer doesn't require network fetches (which would taint the canvas).
- */
 async function inlineImages(root) {
   const images = root.querySelectorAll('image');
   await Promise.all(
     Array.from(images).map(async (el) => {
-      const href = el.getAttribute('href') || el.getAttributeNS('http://www.w3.org/1999/xlink', 'href');
+      const href =
+        el.getAttribute('href') ||
+        el.getAttributeNS('http://www.w3.org/1999/xlink', 'href');
       if (!href || href.startsWith('data:')) return;
       try {
         const res = await fetch(href);
@@ -192,7 +205,7 @@ async function inlineImages(root) {
         const dataUrl = await blobToDataUrl(blob);
         el.setAttribute('href', dataUrl);
       } catch {
-        // leave as-is if it fails; rasterization may still succeed if same-origin
+        // leave as-is if it fails
       }
     })
   );

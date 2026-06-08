@@ -19,8 +19,8 @@ const COLORS = {
 const NUMBER_FONT = "'Bebas Neue', 'STV', sans-serif";
 const TEXT_FONT = "'STV', 'Cairo', 'Tajawal', sans-serif";
 
-export default function RankChart({ data, frame, svgRef }) {
-  const matchweeks = data.matchweeks;
+export default function RankChart({ data, frame, svgRef, stopWeek }) {
+  const matchweeks = stopWeek ? data.matchweeks.slice(0, stopWeek) : data.matchweeks;
   const teams = data.teams;
   const maxRank = teams.length;
 

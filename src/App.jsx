@@ -6,7 +6,7 @@ import { useAnimation, SPEED_PRESETS } from './hooks/useAnimation.js';
 import { exportAnimation } from './utils/videoExport.js';
 import standings from './data/standings.json';
 
-const STOP_WEEK = 24;
+const STOP_WEEK = 25;
 
 export default function App() {
   const totalWeeks = standings.matchweeks.length;
@@ -31,7 +31,7 @@ export default function App() {
         totalFrames: STOP_WEEK,
         renderFrame: (i) => anim.setFrame(i),
         onProgress: setExportProgress,
-        filename: 'syrian-league-race.mov',
+        filename: 'syrian-league-race.mp4',
       });
     } catch (err) {
       console.error('Export failed:', err);
@@ -57,7 +57,7 @@ export default function App() {
         className="w-full max-w-full aspect-[2800/1350] rounded-2xl overflow-hidden shadow-2xl border"
         style={{ background: '#f9f9f9', borderColor: '#066b4f33' }}
       >
-        <RankChart data={standings} frame={anim.frame} svgRef={svgRef} />
+        <RankChart data={standings} frame={anim.frame} svgRef={svgRef} stopWeek={STOP_WEEK} />
       </main>
 
       <section className="w-full max-w-full flex flex-col gap-3">
